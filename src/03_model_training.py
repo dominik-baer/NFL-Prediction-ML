@@ -206,13 +206,21 @@ def main():
     # Daten laden
     print("Lade Daten...")
     try:
-        df = pd.read_csv('nfl_training_data_engineered.csv')
-        print("✓ Engineered Data geladen")
+        df = pd.read_csv('nfl_training_data_ultimate.csv')
+        print("✓ Ultimate Data geladen")
     except:
-        df = pd.read_csv('nfl_training_data.csv')
-        print("✓ Base Data geladen")
+        try:
+            df = pd.read_csv('nfl_training_data_engineered.csv')
+            print("✓ Engineered Data geladen")
+        except:
+            df = pd.read_csv('nfl_training_data.csv')
+            print("✓ Base Data geladen")
     
     df['gameday'] = pd.to_datetime(df['gameday'])
+    
+    # Filter nur completed games
+    df = df[df['home_score'].notna()].copy()
+    print(f"✓ {len(df)} completed games")
     
     # Predictor
     predictor = NFLAcademicPredictor()

@@ -1,6 +1,6 @@
 """
-NFL ULTIMATE PREDICTOR - Clean Layout
-Übersicht → Details
+NFL GAME PREDICTOR - Academic Model
+High Confidence Strategy (≥75% Win Probability)
 """
 
 import pandas as pd
@@ -8,70 +8,38 @@ import numpy as np
 import pickle
 from datetime import datetime
 
+
 class NFLPredictor:
-    """Clean NFL Prediction Interface"""
+    """NFL Game Prediction System"""
     
     def __init__(self):
         self.models_loaded = False
         self.data_loaded = False
         
-    def select_model(self):
-        """Model wählen"""
-        
-        print("\n" + "="*70)
-        print("🏈 NFL PREDICTOR")
-        print("="*70)
-        
-        print("\n📊 Wähle Model:")
-        print("\n1️⃣  Academic (ohne Vegas)")
-        print("2️⃣  Betting (mit Vegas)")
-        
-        while True:
-            choice = input("\n👉 Eingabe (1 oder 2): ").strip()
-            
-            if choice == '1':
-                self.model_type = 'academic'
-                print("\n✅ Academic Model\n")
-                break
-            elif choice == '2':
-                self.model_type = 'betting'
-                print("\n✅ Betting Model\n")
-                break
-            else:
-                print("❌ Bitte 1 oder 2!")
-    
     def load_models(self):
-        """Lädt Models"""
+        """Load Academic Models"""
         
         try:
-            if self.model_type == 'academic':
-                with open('models/academic_win_rf.pkl', 'rb') as f:
-                    self.win_model = pickle.load(f)
-                with open('models/academic_spread_rf.pkl', 'rb') as f:
-                    self.spread_model = pickle.load(f)
-                with open('models/academic_total_rf.pkl', 'rb') as f:
-                    self.total_model = pickle.load(f)
-                with open('models/academic_features.pkl', 'rb') as f:
-                    self.features = pickle.load(f)
-            else:
-                with open('models/betting_win.pkl', 'rb') as f:
-                    self.win_model = pickle.load(f)
-                with open('models/betting_spread.pkl', 'rb') as f:
-                    self.spread_model = pickle.load(f)
-                with open('models/betting_total.pkl', 'rb') as f:
-                    self.total_model = pickle.load(f)
-                with open('models/betting_features.pkl', 'rb') as f:
-                    self.features = pickle.load(f)
+            with open('models/academic_win_rf.pkl', 'rb') as f:
+                self.win_model = pickle.load(f)
+            with open('models/academic_spread_rf.pkl', 'rb') as f:
+                self.spread_model = pickle.load(f)
+            with open('models/academic_total_rf.pkl', 'rb') as f:
+                self.total_model = pickle.load(f)
+            with open('models/academic_features.pkl', 'rb') as f:
+                self.features = pickle.load(f)
             
             self.models_loaded = True
+            print("✓ Academic Model loaded (Pure ML, no Vegas)")
             return True
             
-        except FileNotFoundError:
-            print(f"❌ Models nicht gefunden! Führe 03_model_betting.py aus")
+        except FileNotFoundError as e:
+            print(f"❌ Models not found! Run model_academic.py first")
+            print(f"   Missing: {e}")
             return False
     
     def load_data(self):
-        """Lädt Daten"""
+        """Load data"""
         
         try:
             self.df = pd.read_csv('nfl_training_data_ultimate.csv')
@@ -79,20 +47,25 @@ class NFLPredictor:
             self.data_loaded = True
             return True
         except:
-            print("❌ Daten nicht gefunden!")
+            print("❌ Data not found!")
             return False
     
     def predict_game(self, game_row):
-        """Macht Prediction"""
+        """Make prediction for a game"""
         
         available_features = [f for f in self.features if f in game_row.index]
         X = game_row[available_features].values.reshape(1, -1)
         X = pd.DataFrame(X, columns=available_features)
         X = X.fillna(X.mean())
         
+        # Predictions
         win_proba = self.win_model.predict_proba(X)[0]
         spread_pred = self.spread_model.predict(X)[0]
         total_pred = self.total_model.predict(X)[0]
+        
+        # Derive scores from spread + total
+        home_score_pred = (total_pred + spread_pred) / 2
+        away_score_pred = (total_pred - spread_pred) / 2
         
         return {
             'home_team': game_row.get('home_team', 'Home'),
@@ -102,45 +75,36 @@ class NFLPredictor:
             'win_prob_away': 1 - win_proba[1],
             'predicted_spread': spread_pred,
             'predicted_total': total_pred,
-            'vegas_spread': game_row.get('spread_line', None),
-            'vegas_total': game_row.get('total_line', None)
+            'predicted_home_score': home_score_pred,
+            'predicted_away_score': away_score_pred,
+            'actual_home_score': game_row.get('home_score', None),
+            'actual_away_score': game_row.get('away_score', None)
         }
     
-    def should_bet(self, prediction):
-        """Check ob Ultra Conservative Bet"""
+    def is_high_confidence(self, prediction):
+        """Check if game meets High Confidence criteria (≥75% win probability)"""
         
         win_prob_home = prediction['win_prob_home']
         win_prob_away = prediction['win_prob_away']
-        vegas_spread = prediction['vegas_spread']
-        our_spread = prediction['predicted_spread']
         
-        if pd.isna(vegas_spread):
-            return False, None
+        # HOME high confidence
+        if win_prob_home >= 0.75:
+            return True, prediction['home_team'], win_prob_home
         
-        spread_agreement = abs(our_spread - vegas_spread)
+        # AWAY high confidence
+        if win_prob_away >= 0.75:
+            return True, prediction['away_team'], win_prob_away
         
-        # OPTIMIZED Ultra Conservative (from grid search):
-        # Win Prob ≥ 80% AND Spread Agreement ≤ 4.5 pts
-        # → 84.3% Win Rate, +40.7% ROI
-        
-        # Check HOME team
-        if win_prob_home >= 0.80 and spread_agreement <= 4.5:
-            return True, prediction['home_team']
-        
-        # Check AWAY team
-        if win_prob_away >= 0.80 and spread_agreement <= 4.5:
-            return True, prediction['away_team']
-        
-        return False, None
+        return False, None, None
     
     def show_overview(self, predictions):
-        """Zeigt Clean Overview"""
+        """Show clean overview of all games"""
         
-        print("\n" + "="*70)
+        print("\n" + "="*100)
         print("📊 WEEK OVERVIEW")
-        print("="*70)
-        print(f"\n{'Matchup':<25} {'Win Prob':<20} {'Betting':<15}")
-        print("─"*70)
+        print("="*100)
+        print(f"\n{'#':<4} {'Matchup':<25} {'Score':<12} {'Spread':<10} {'Total':<8} {'Win Prob':<18} {'Recommendation':<15}")
+        print("─"*100)
         
         for i, pred in enumerate(predictions, 1):
             away = pred['away_team']
@@ -149,73 +113,119 @@ class NFLPredictor:
             prob_home = pred['win_prob_home']
             
             matchup = f"{away} @ {home}"
-            probs = f"{prob_away:.0%} - {prob_home:.0%}"
+            probs = f"{prob_away:.0%}-{prob_home:.0%}"
             
-            should_bet, bet_team = self.should_bet(pred)
+            # Score - show actual if available, predicted otherwise
+            actual_home = pred.get('actual_home_score')
+            actual_away = pred.get('actual_away_score')
             
-            if should_bet:
-                bet_str = f"✅ BET {bet_team}"
+            if pd.notna(actual_home) and pd.notna(actual_away):
+                score = f"{actual_away:.0f}-{actual_home:.0f}"
             else:
-                bet_str = "❌ SKIP"
+                pred_home = pred['predicted_home_score']
+                pred_away = pred['predicted_away_score']
+                score = f"~{pred_away:.0f}-{pred_home:.0f}"
             
-            print(f"{i:2d}. {matchup:<22} {probs:<20} {bet_str:<15}")
+            # Spread
+            our_spread = pred['predicted_spread']
+            spread = f"{our_spread:+.1f}"
+            
+            # Total
+            our_total = pred['predicted_total']
+            total = f"{our_total:.0f}"
+            
+            # High Confidence check
+            is_hc, bet_team, confidence = self.is_high_confidence(pred)
+            
+            if is_hc:
+                rec = f"✅ BET {bet_team}"
+            else:
+                rec = "❌ SKIP"
+            
+            print(f"{i:<4} {matchup:<25} {score:<12} {spread:<10} {total:<8} {probs:<18} {rec:<15}")
         
-        print("─"*70)
+        print("─"*100)
     
     def show_details(self, predictions):
-        """Zeigt Details für alle Spiele"""
+        """Show detailed analysis for high confidence bets only"""
         
-        for i, pred in enumerate(predictions, 1):
+        # Filter for high confidence bets
+        hc_predictions = []
+        for pred in predictions:
+            is_hc, bet_team, confidence = self.is_high_confidence(pred)
+            if is_hc:
+                hc_predictions.append((pred, bet_team, confidence))
+        
+        if len(hc_predictions) == 0:
+            print("\n⚠️  No high confidence bets this week")
+            return
+        
+        for i, (pred, bet_team, confidence) in enumerate(hc_predictions, 1):
             print("\n" + "="*70)
-            print(f"🏈 GAME {i}/{len(predictions)}: {pred['away_team']} @ {pred['home_team']}")
+            print(f"🎯 HIGH CONFIDENCE BET {i}/{len(hc_predictions)}: {pred['away_team']} @ {pred['home_team']}")
             print("="*70)
             
+            # Recommendation
+            print(f"\n💰 RECOMMENDATION:")
+            print(f"   ✅ BET: {bet_team}")
+            print(f"   📊 Confidence: {confidence:.1%}")
+            print(f"   🎯 Strategy: High Confidence (≥75%)")
+            
+            # Score Prediction
+            actual_home = pred.get('actual_home_score')
+            actual_away = pred.get('actual_away_score')
+            
+            print(f"\n🎯 SCORE PREDICTION:")
+            print(f"   {pred['away_team']:<20} {pred['predicted_away_score']:>6.1f}")
+            print(f"   {pred['home_team']:<20} {pred['predicted_home_score']:>6.1f}")
+            
+            if pd.notna(actual_home) and pd.notna(actual_away):
+                print(f"\n   ACTUAL SCORE:")
+                print(f"   {pred['away_team']:<20} {actual_away:>6.0f}")
+                print(f"   {pred['home_team']:<20} {actual_home:>6.0f}")
+                
+                # Check if bet won
+                home_won = actual_home > actual_away
+                away_won = actual_away > actual_home
+                
+                bet_won = (bet_team == pred['home_team'] and home_won) or \
+                         (bet_team == pred['away_team'] and away_won)
+                
+                if bet_won:
+                    print(f"\n   ✅ BET WON!")
+                else:
+                    print(f"\n   ❌ BET LOST")
+            
             # Win Probability
-            print(f"\n🎯 WIN PROBABILITY:")
+            print(f"\n📈 WIN PROBABILITY:")
             print(f"   {pred['home_team']:<20} {pred['win_prob_home']:>6.1%}")
             print(f"   {pred['away_team']:<20} {pred['win_prob_away']:>6.1%}")
             
-            # Spread
-            print(f"\n📏 SPREAD:")
-            print(f"   Our Prediction:  {pred['predicted_spread']:>+7.1f}")
-            if not pd.isna(pred['vegas_spread']):
-                print(f"   Vegas Line:      {pred['vegas_spread']:>+7.1f}")
-                diff = abs(pred['predicted_spread'] - pred['vegas_spread'])
-                print(f"   Difference:      {diff:>7.1f} pts")
+            # Spread & Total
+            print(f"\n📏 SPREAD & TOTAL:")
+            print(f"   Predicted Spread:  {pred['predicted_spread']:>+7.1f}")
+            print(f"   Predicted Total:   {pred['predicted_total']:>7.1f}")
             
-            # Total
-            print(f"\n🎲 OVER/UNDER:")
-            print(f"   Our Prediction:  {pred['predicted_total']:>7.1f}")
-            if not pd.isna(pred['vegas_total']):
-                print(f"   Vegas Line:      {pred['vegas_total']:>7.1f}")
-                diff = abs(pred['predicted_total'] - pred['vegas_total'])
-                print(f"   Difference:      {diff:>7.1f} pts")
+            # Historical Performance
+            print(f"\n📊 STRATEGY PERFORMANCE:")
+            print(f"   Historical: 78.8% Win Rate")
+            print(f"   ROI: +18.1% (base case)")
+            print(f"   Validated: 2020-2025 (240 bets)")
             
-            # Betting Recommendation
-            should_bet, bet_team = self.should_bet(pred)
-            
-            print(f"\n💰 BETTING:")
-            if should_bet:
-                print(f"   ✅ ULTRA CONSERVATIVE BET")
-                print(f"   🎯 Bet: MONEYLINE {bet_team}")
-                prob = pred['win_prob_home'] if bet_team == pred['home_team'] else pred['win_prob_away']
-                print(f"   📊 Confidence: {prob:.1%}")
-                print(f"   📈 Historical: 81% Win Rate, +35% ROI")
-            else:
-                print(f"   ❌ NO HIGH PRIORITY BET")
-                print(f"   → Skip this game")
-            
-            # Pause
-            if i < len(predictions):
-                input("\n[Enter für nächstes Spiel...]")
+            # Pause between bets
+            if i < len(hc_predictions):
+                input("\n[Press Enter for next bet...]")
     
     def run(self):
-        """Hauptfunktion"""
+        """Main function"""
         
-        # Model wählen
-        self.select_model()
+        print("\n" + "="*70)
+        print("🏈 NFL GAME PREDICTOR")
+        print("="*70)
+        print("\nAcademic Model - Pure Machine Learning")
+        print("Strategy: High Confidence (≥75% Win Probability)\n")
         
-        # Laden
+        # Load
         if not self.load_models():
             return
         
@@ -232,6 +242,7 @@ class NFLPredictor:
             if len(upcoming) > 0:
                 week = upcoming['week'].min()
             else:
+                # All games completed, show last week
                 week = season_games['week'].max()
         else:
             week = season_games['week'].max()
@@ -252,24 +263,30 @@ class NFLPredictor:
             # Show overview
             self.show_overview(predictions)
             
-            # Count bets
-            bets = sum(1 for p in predictions if self.should_bet(p)[0])
-            print(f"\n💪 Ultra Conservative Bets: {bets}")
+            # Count high confidence bets
+            hc_count = sum(1 for p in predictions if self.is_high_confidence(p)[0])
+            print(f"\n💪 High Confidence Bets: {hc_count}")
+            
+            # Historical stats
+            print(f"\n📊 Strategy Performance (2020-2025):")
+            print(f"   Win Rate: 78.8%")
+            print(f"   ROI: +18.1%")
+            print(f"   Total Bets: 240 (40/year)")
             
             # Menu
             print("\n" + "="*70)
-            print("\n1️⃣  Details anzeigen")
+            print("\n1️⃣  Show Bet Details")
             print("2️⃣  Exit")
             
-            choice = input("\n👉 Eingabe (1 oder 2): ").strip()
+            choice = input("\n👉 Choice (1-2): ").strip()
             
             if choice == '1':
                 self.show_details(predictions)
             elif choice == '2':
-                print("\n👋 Bye! Good luck! 🍀\n")
+                print("\n👋 Good luck! 🍀\n")
                 break
             else:
-                print("❌ Bitte 1 oder 2!")
+                print("❌ Please enter 1 or 2")
 
 
 def main():
