@@ -1,6 +1,6 @@
 """
 NFL GAME PREDICTOR - Academic Model
-High Confidence Strategy (≥75% Win Probability)
+Two Strategies: High Confidence (≥75%) + Multi Strategy (ML:7%/60% + Spr:5/60%)
 """
 
 import pandas as pd
@@ -50,6 +50,13 @@ class NFLPredictor:
             print("❌ Data not found!")
             return False
     
+    def calculate_implied_probability(self, spread_line):
+        """Convert spread to implied win probability"""
+        if pd.isna(spread_line):
+            return 0.5
+        prob = 0.5 + (spread_line / 28)
+        return max(0.1, min(0.9, prob))
+    
     def predict_game(self, game_row):
         """Make prediction for a game"""
         
@@ -67,6 +74,16 @@ class NFLPredictor:
         home_score_pred = (total_pred + spread_pred) / 2
         away_score_pred = (total_pred - spread_pred) / 2
         
+        # Get Vegas lines for edge calculation
+        vegas_spread = game_row.get('spread_line', 0)
+        vegas_total = game_row.get('total_line', 0)
+        
+        # Calculate edges
+        vegas_prob_home = self.calculate_implied_probability(vegas_spread)
+        edge_home = win_proba[1] - vegas_prob_home
+        edge_away = (1 - win_proba[1]) - (1 - vegas_prob_home)
+        spread_diff = spread_pred - vegas_spread
+        
         return {
             'home_team': game_row.get('home_team', 'Home'),
             'away_team': game_row.get('away_team', 'Away'),
@@ -78,7 +95,12 @@ class NFLPredictor:
             'predicted_home_score': home_score_pred,
             'predicted_away_score': away_score_pred,
             'actual_home_score': game_row.get('home_score', None),
-            'actual_away_score': game_row.get('away_score', None)
+            'actual_away_score': game_row.get('away_score', None),
+            'vegas_spread': vegas_spread,
+            'vegas_total': vegas_total,
+            'edge_home': edge_home,
+            'edge_away': edge_away,
+            'spread_diff': spread_diff
         }
     
     def is_high_confidence(self, prediction):
@@ -97,14 +119,44 @@ class NFLPredictor:
         
         return False, None, None
     
+    def get_multi_strategy_bet(self, prediction):
+        """
+        Multi-Strategy Betting (ML:7%/60% + Spr:5/60%)
+        Returns betting recommendation string
+        """
+        
+        home_prob = prediction['win_prob_home']
+        away_prob = prediction['win_prob_away']
+        edge_home = prediction['edge_home']
+        edge_away = prediction['edge_away']
+        spread_diff = prediction['spread_diff']
+        home_team = prediction['home_team']
+        away_team = prediction['away_team']
+        
+        # Moneyline: Edge ≥7% + Confidence ≥60%
+        if home_prob >= 0.60 and edge_home >= 0.07:
+            return f"✅ ML: {home_team}"
+        
+        if away_prob >= 0.60 and edge_away >= 0.07:
+            return f"✅ ML: {away_team}"
+        
+        # Spread: Diff ≥5pts + Confidence ≥60%
+        if home_prob >= 0.60 and spread_diff >= 5:
+            return f"✅ Spr: {home_team}"
+        
+        if away_prob >= 0.60 and spread_diff <= -5:
+            return f"✅ Spr: {away_team}"
+        
+        return "⏸️  Skip"
+    
     def show_overview(self, predictions):
         """Show clean overview of all games"""
         
-        print("\n" + "="*100)
+        print("\n" + "="*116)
         print("📊 WEEK OVERVIEW")
-        print("="*100)
-        print(f"\n{'#':<4} {'Matchup':<25} {'Score':<12} {'Spread':<10} {'Total':<8} {'Win Prob':<18} {'Recommendation':<15}")
-        print("─"*100)
+        print("="*116)
+        print(f"\n{'#':<4} {'Matchup':<25} {'Score':<12} {'Spread':<10} {'Total':<8} {'Win Prob':<18} {'High Conf':<14} {'Multi Strategy':<15}")
+        print("─"*116)
         
         for i, pred in enumerate(predictions, 1):
             away = pred['away_team']
@@ -142,34 +194,58 @@ class NFLPredictor:
             else:
                 rec = "❌ SKIP"
             
-            print(f"{i:<4} {matchup:<25} {score:<12} {spread:<10} {total:<8} {probs:<18} {rec:<15}")
+            # Multi Strategy check
+            multi_bet = self.get_multi_strategy_bet(pred)
+            
+            print(f"{i:<4} {matchup:<25} {score:<12} {spread:<10} {total:<8} {probs:<18} {rec:<14} {multi_bet:<15}")
         
-        print("─"*100)
+        print("─"*116)
     
-    def show_details(self, predictions):
-        """Show detailed analysis for high confidence bets only"""
+    def show_details(self, predictions, strategy='high_conf'):
+        """Show detailed analysis for bets"""
         
-        # Filter for high confidence bets
-        hc_predictions = []
-        for pred in predictions:
-            is_hc, bet_team, confidence = self.is_high_confidence(pred)
-            if is_hc:
-                hc_predictions.append((pred, bet_team, confidence))
+        if strategy == 'high_conf':
+            # Filter for high confidence bets
+            filtered_predictions = []
+            for pred in predictions:
+                is_hc, bet_team, confidence = self.is_high_confidence(pred)
+                if is_hc:
+                    filtered_predictions.append((pred, bet_team, confidence, 'High Confidence'))
         
-        if len(hc_predictions) == 0:
-            print("\n⚠️  No high confidence bets this week")
+        else:  # multi strategy
+            # Filter for multi strategy bets
+            filtered_predictions = []
+            for pred in predictions:
+                multi_bet = self.get_multi_strategy_bet(pred)
+                if '✅' in multi_bet:
+                    # Extract team and bet type
+                    parts = multi_bet.split(': ')
+                    bet_type = parts[0].replace('✅ ', '')
+                    bet_team = parts[1]
+                    confidence = max(pred['win_prob_home'], pred['win_prob_away'])
+                    filtered_predictions.append((pred, bet_team, confidence, f'Multi Strategy ({bet_type})'))
+        
+        if len(filtered_predictions) == 0:
+            print(f"\n⚠️  No {strategy.replace('_', ' ')} bets this week")
             return
         
-        for i, (pred, bet_team, confidence) in enumerate(hc_predictions, 1):
+        for i, (pred, bet_team, confidence, strategy_name) in enumerate(filtered_predictions, 1):
             print("\n" + "="*70)
-            print(f"🎯 HIGH CONFIDENCE BET {i}/{len(hc_predictions)}: {pred['away_team']} @ {pred['home_team']}")
+            print(f"🎯 BET {i}/{len(filtered_predictions)}: {pred['away_team']} @ {pred['home_team']}")
             print("="*70)
             
             # Recommendation
             print(f"\n💰 RECOMMENDATION:")
             print(f"   ✅ BET: {bet_team}")
             print(f"   📊 Confidence: {confidence:.1%}")
-            print(f"   🎯 Strategy: High Confidence (≥75%)")
+            print(f"   🎯 Strategy: {strategy_name}")
+            
+            if 'Multi' in strategy_name:
+                if 'ML' in strategy_name:
+                    edge = pred['edge_home'] if bet_team == pred['home_team'] else pred['edge_away']
+                    print(f"   📈 Edge vs Market: {edge:+.1%}")
+                else:  # Spread
+                    print(f"   📏 Spread Advantage: {abs(pred['spread_diff']):.1f} points")
             
             # Score Prediction
             actual_home = pred.get('actual_home_score')
@@ -206,14 +282,8 @@ class NFLPredictor:
             print(f"   Predicted Spread:  {pred['predicted_spread']:>+7.1f}")
             print(f"   Predicted Total:   {pred['predicted_total']:>7.1f}")
             
-            # Historical Performance
-            print(f"\n📊 STRATEGY PERFORMANCE:")
-            print(f"   Historical: 78.8% Win Rate")
-            print(f"   ROI: +18.1% (base case)")
-            print(f"   Validated: 2020-2025 (240 bets)")
-            
             # Pause between bets
-            if i < len(hc_predictions):
+            if i < len(filtered_predictions):
                 input("\n[Press Enter for next bet...]")
     
     def run(self):
@@ -223,7 +293,9 @@ class NFLPredictor:
         print("🏈 NFL GAME PREDICTOR")
         print("="*70)
         print("\nAcademic Model - Pure Machine Learning")
-        print("Strategy: High Confidence (≥75% Win Probability)\n")
+        print("Two Strategies Available:")
+        print("  1. High Confidence (≥75% Win Probability)")
+        print("  2. Multi Strategy (ML:7%/60% + Spr:5/60%)\n")
         
         # Load
         if not self.load_models():
@@ -263,30 +335,45 @@ class NFLPredictor:
             # Show overview
             self.show_overview(predictions)
             
-            # Count high confidence bets
+            # Count bets for each strategy
             hc_count = sum(1 for p in predictions if self.is_high_confidence(p)[0])
-            print(f"\n💪 High Confidence Bets: {hc_count}")
+            multi_count = sum(1 for p in predictions if '✅' in self.get_multi_strategy_bet(p))
+            
+            print(f"\n💪 High Confidence Bets (≥75%): {hc_count}")
+            print(f"🎯 Multi Strategy Bets: {multi_count}")
             
             # Historical stats
-            print(f"\n📊 Strategy Performance (2020-2025):")
-            print(f"   Win Rate: 78.8%")
-            print(f"   ROI: +18.1%")
-            print(f"   Total Bets: 240 (40/year)")
+            print(f"\n📊 Strategy Performance (Walk-Forward Validated 2020-2025):")
+            print(f"\n   High Confidence (≥75%):")
+            print(f"     Win Rate: 80.4%")
+            print(f"     ROI: +9.4%")
+            print(f"     Volume: 37 bets/year")
+            print(f"     Consistency: 5/6 years profitable")
+            
+            print(f"\n   Multi Strategy (ML:7%/60% + Spr:5/60%):")
+            print(f"     Win Rate: 57.3%")
+            print(f"     ROI: +7.9%")
+            print(f"     Volume: 70 bets/year")
+            print(f"     Profit/Year: $550 (at $100/bet)")
+            print(f"     Consistency: 5/6 years profitable")
             
             # Menu
             print("\n" + "="*70)
-            print("\n1️⃣  Show Bet Details")
-            print("2️⃣  Exit")
+            print("\n1️⃣  Show High Confidence Bet Details")
+            print("2️⃣  Show Multi Strategy Bet Details")
+            print("3️⃣  Exit")
             
-            choice = input("\n👉 Choice (1-2): ").strip()
+            choice = input("\n👉 Choice (1-3): ").strip()
             
             if choice == '1':
-                self.show_details(predictions)
+                self.show_details(predictions, strategy='high_conf')
             elif choice == '2':
+                self.show_details(predictions, strategy='multi')
+            elif choice == '3':
                 print("\n👋 Good luck! 🍀\n")
                 break
             else:
-                print("❌ Please enter 1 or 2")
+                print("❌ Please enter 1, 2, or 3")
 
 
 def main():
