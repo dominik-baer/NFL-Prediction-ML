@@ -1,363 +1,387 @@
 """
-PERFORMANCE TRACKER
-Tracks predictions vs actual results - Essential for monitoring system performance!
+2025 SEASON PERFORMANCE TRACKER - FIXED VERSION
+Shows all games with predictions vs actual + MAE tracking
+Uses optimized K values (40/65/20/135/135) loaded dynamically
+Includes Tiered Confidence Strategy with realistic odds
 """
 
 import pandas as pd
 import numpy as np
-from datetime import datetime
-import os
 import pickle
+import json
+import warnings
+
+# Suppress FutureWarnings
+warnings.filterwarnings('ignore', category=FutureWarning)
 
 
-class PerformanceTracker:
-    """Tracks and analyzes prediction performance"""
+class Season2025Tracker:
+    """Track 2025 season prediction performance with MAE"""
     
     def __init__(self):
-        self.results_file = 'performance_results.csv'
-        self.summary_file = 'performance_summary.csv'
+        self.load_models()
+        self.load_data()
+    
+    def load_models(self):
+        """Load trained models with dynamic K configuration"""
+        print("Loading models...")
         
+        with open('models/win_loss_model.pkl', 'rb') as f:
+            self.win_model = pickle.load(f)
+        with open('models/spread_model.pkl', 'rb') as f:
+            self.spread_model = pickle.load(f)
+        with open('models/total_model.pkl', 'rb') as f:
+            self.total_model = pickle.load(f)
+        with open('models/home_score_model.pkl', 'rb') as f:
+            self.home_score_model = pickle.load(f)
+        with open('models/away_score_model.pkl', 'rb') as f:
+            self.away_score_model = pickle.load(f)
+        with open('models/feature_sets.pkl', 'rb') as f:
+            self.feature_sets = pickle.load(f)
+        
+        # Load K configuration dynamically
+        try:
+            with open('models/optimal_k_config.json', 'r') as f:
+                self.k_config = json.load(f)
+        except FileNotFoundError:
+            # Fallback: infer from feature sets
+            self.k_config = {name: len(features) for name, features in self.feature_sets.items()}
+        
+        print("✓ Models loaded")
+        print(f"  - Win/Loss: K={self.k_config.get('win_loss', 'N/A')}")
+        print(f"  - Spread: K={self.k_config.get('spread', 'N/A')}")
+        print(f"  - Total: K={self.k_config.get('total', 'N/A')}")
+        print(f"  - Home Score: K={self.k_config.get('home_score', 'N/A')}")
+        print(f"  - Away Score: K={self.k_config.get('away_score', 'N/A')}\n")
+    
     def load_data(self):
-        """Load training data with actual results"""
-        try:
-            self.df = pd.read_csv('nfl_training_data_ultimate.csv')
-            self.df['gameday'] = pd.to_datetime(self.df['gameday'])
-            print("✓ Data loaded")
-            return True
-        except:
-            print("❌ Failed to load data")
-            return False
-    
-    def load_models(self, model_type='betting'):
-        """Load models"""
-        try:
-            with open(f'models/{model_type}_win.pkl', 'rb') as f:
-                self.win_model = pickle.load(f)
-            with open(f'models/{model_type}_spread.pkl', 'rb') as f:
-                self.spread_model = pickle.load(f)
-            with open(f'models/{model_type}_total.pkl', 'rb') as f:
-                self.total_model = pickle.load(f)
-            with open(f'models/{model_type}_home_score.pkl', 'rb') as f:
-                self.home_score_model = pickle.load(f)
-            with open(f'models/{model_type}_away_score.pkl', 'rb') as f:
-                self.away_score_model = pickle.load(f)
-            with open(f'models/{model_type}_features.pkl', 'rb') as f:
-                self.features = pickle.load(f)
-            
-            self.model_type = model_type
-            print(f"✓ {model_type.upper()} models loaded")
-            return True
-        except Exception as e:
-            print(f"❌ Failed to load models: {e}")
-            return False
-    
-    def predict_game(self, game_row):
-        """Make prediction for a game"""
-        available_features = [f for f in self.features if f in game_row.index]
-        X = game_row[available_features].values.reshape(1, -1)
-        X = pd.DataFrame(X, columns=available_features)
-        X = X.fillna(X.mean())
+        """Load 2025 season data"""
+        df = pd.read_csv('nfl_training_data_MEGA.csv')
+        df['gameday'] = pd.to_datetime(df['gameday'])
         
-        win_proba = self.win_model.predict_proba(X)[0]
-        spread_pred = self.spread_model.predict(X)[0]
-        total_pred = self.total_model.predict(X)[0]
-        home_score_pred = self.home_score_model.predict(X)[0]
-        away_score_pred = self.away_score_model.predict(X)[0]
+        self.df = df[df['season'] == 2025].copy()
+        self.completed = self.df[self.df['home_score'].notna()].copy()
+        
+        print(f"📅 2025 Season: {len(self.completed)} games completed\n")
+    
+    def calculate_american_odds(self, win_rate):
+        """Convert win rate to American odds"""
+        if win_rate >= 0.5:
+            # Favorite (negative odds)
+            if win_rate >= 0.99:
+                return -10000
+            odds = -(win_rate / (1 - win_rate)) * 100
+        else:
+            # Underdog (positive odds)
+            if win_rate <= 0.01:
+                return 10000
+            odds = ((1 - win_rate) / win_rate) * 100
+        return odds
+    
+    def calculate_realistic_profit(self, win_prob, bet_size, won):
+        """Calculate profit with realistic odds based on win probability"""
+        odds = self.calculate_american_odds(win_prob)
+        
+        if won:
+            if odds < 0:
+                # Favorite: risk |odds| to win 100
+                profit = bet_size * (100 / abs(odds))
+            else:
+                # Underdog: risk 100 to win odds
+                profit = bet_size * (odds / 100)
+            return profit
+        else:
+            # Lost bet
+            return -bet_size
+    
+    def calculate_implied_probability(self, spread_line):
+        """Convert spread to implied win probability"""
+        if pd.isna(spread_line):
+            return 0.5
+        prob = 0.5 + (spread_line / 28)
+        return max(0.1, min(0.9, prob))
+    
+    def make_predictions(self, game_row):
+        """Generate predictions using all 5 models"""
+        
+        # Win/Loss
+        win_features = [f for f in self.feature_sets['win_loss'] if f in game_row.index]
+        X_win = game_row[win_features].values.reshape(1, -1)
+        X_win = pd.DataFrame(X_win, columns=win_features).fillna(0).infer_objects(copy=False)
+        win_proba = self.win_model.predict_proba(X_win)[0]
+        
+        # Spread
+        spread_features = [f for f in self.feature_sets['spread'] if f in game_row.index]
+        X_spread = game_row[spread_features].values.reshape(1, -1)
+        X_spread = pd.DataFrame(X_spread, columns=spread_features).fillna(0).infer_objects(copy=False)
+        spread_pred = self.spread_model.predict(X_spread)[0]
+        
+        # Total
+        total_features = [f for f in self.feature_sets['total'] if f in game_row.index]
+        X_total = game_row[total_features].values.reshape(1, -1)
+        X_total = pd.DataFrame(X_total, columns=total_features).fillna(0).infer_objects(copy=False)
+        total_pred = self.total_model.predict(X_total)[0]
+        
+        # Home Score
+        home_features = [f for f in self.feature_sets['home_score'] if f in game_row.index]
+        X_home = game_row[home_features].values.reshape(1, -1)
+        X_home = pd.DataFrame(X_home, columns=home_features).fillna(0).infer_objects(copy=False)
+        home_pred = self.home_score_model.predict(X_home)[0]
+        
+        # Away Score
+        away_features = [f for f in self.feature_sets['away_score'] if f in game_row.index]
+        X_away = game_row[away_features].values.reshape(1, -1)
+        X_away = pd.DataFrame(X_away, columns=away_features).fillna(0).infer_objects(copy=False)
+        away_pred = self.away_score_model.predict(X_away)[0]
+        
+        home_prob = win_proba[1]
+        away_prob = win_proba[0]
+        
+        vegas_spread = game_row.get('spread_line', 0)
+        vegas_prob_home = self.calculate_implied_probability(vegas_spread)
+        edge_home = home_prob - vegas_prob_home
+        edge_away = away_prob - (1 - vegas_prob_home)
+        spread_diff = spread_pred - vegas_spread
         
         return {
-            'win_prob_home': win_proba[1],
-            'win_prob_away': 1 - win_proba[1],
+            'home_prob': home_prob,
+            'away_prob': away_prob,
             'predicted_spread': spread_pred,
             'predicted_total': total_pred,
-            'predicted_home_score': home_score_pred,
-            'predicted_away_score': away_score_pred
+            'predicted_home_score': home_pred,
+            'predicted_away_score': away_pred,
+            'edge_home': edge_home,
+            'edge_away': edge_away,
+            'spread_diff': spread_diff
         }
     
-    def is_ultra_conservative_bet(self, prediction, vegas_spread):
-        """Check if qualifies as Ultra Conservative bet"""
-        if pd.isna(vegas_spread):
-            return False, None
+    def check_tiered_confidence(self, pred, game_row):
+        """
+        Check Tiered Confidence Strategy (Base ≥70%)
+        Returns: (should_bet, team, confidence, bet_size, tier)
+        """
+        max_prob = max(pred['home_prob'], pred['away_prob'])
         
-        spread_agreement = abs(prediction['predicted_spread'] - vegas_spread)
+        # Determine tier and bet size
+        if max_prob >= 0.85:
+            bet_size = 30
+            tier = "T4"
+        elif max_prob >= 0.80:
+            bet_size = 20
+            tier = "T3"
+        elif max_prob >= 0.75:
+            bet_size = 15
+            tier = "T2"
+        elif max_prob >= 0.70:
+            bet_size = 10
+            tier = "T1"
+        else:
+            return False, None, None, 0, None
         
-        # Optimized thresholds
-        if prediction['win_prob_home'] >= 0.80 and spread_agreement <= 4.5:
-            return True, 'home'
+        # Determine which team
+        if pred['home_prob'] > pred['away_prob']:
+            team = game_row['home_team']
+            confidence = pred['home_prob']
+        else:
+            team = game_row['away_team']
+            confidence = pred['away_prob']
         
-        if prediction['win_prob_away'] >= 0.80 and spread_agreement <= 4.5:
-            return True, 'away'
-        
-        return False, None
+        return True, team, confidence, bet_size, tier
     
-    def analyze_season(self, season, week_start=1, week_end=18):
-        """Analyze performance for a season"""
+    def check_result(self, game_row, predicted_team):
+        """Check if prediction correct"""
+        home_score = game_row['home_score']
+        away_score = game_row['away_score']
+        actual_winner = game_row['home_team'] if home_score > away_score else game_row['away_team']
+        return actual_winner == predicted_team
+    
+    def print_week(self, week):
+        """Print week results with MAE tracking"""
         
-        print(f"\n{'='*70}")
-        print(f"📊 ANALYZING {season} SEASON (Weeks {week_start}-{week_end})")
-        print(f"{'='*70}\n")
+        week_games = self.completed[self.completed['week'] == week].copy()
         
-        # Get completed games for this season
-        season_games = self.df[
-            (self.df['season'] == season) & 
-            (self.df['week'] >= week_start) &
-            (self.df['week'] <= week_end) &
-            (self.df['home_score'].notna())
-        ].copy()
-        
-        if len(season_games) == 0:
-            print(f"⚠️  No completed games found for {season}")
+        if len(week_games) == 0:
             return None
         
-        print(f"Found {len(season_games)} completed games\n")
+        week_games = week_games.sort_values('gameday')
         
-        results = []
+        print("\n" + "="*130)
+        print(f"📊 WEEK {week}")
+        print("="*130)
         
-        for _, game in season_games.iterrows():
-            # Make prediction
-            pred = self.predict_game(game)
-            
-            # Check if bet
-            is_bet, bet_side = self.is_ultra_conservative_bet(pred, game.get('spread_line'))
-            
-            if not is_bet:
-                continue
-            
-            # Actual result
-            actual_home_win = game['home_win']
-            bet_won = (bet_side == 'home' and actual_home_win == 1) or \
-                      (bet_side == 'away' and actual_home_win == 0)
-            
-            # Calculate errors
-            spread_error = abs(pred['predicted_spread'] - game['result'])
-            total_error = abs(pred['predicted_total'] - (game['home_score'] + game['away_score']))
-            home_score_error = abs(pred['predicted_home_score'] - game['home_score'])
-            away_score_error = abs(pred['predicted_away_score'] - game['away_score'])
-            
-            results.append({
-                'season': season,
-                'week': game['week'],
-                'date': game['gameday'],
-                'away_team': game['away_team'],
-                'home_team': game['home_team'],
-                'bet_team': game['home_team'] if bet_side == 'home' else game['away_team'],
-                'win_prob': pred['win_prob_home'] if bet_side == 'home' else pred['win_prob_away'],
-                'predicted_spread': pred['predicted_spread'],
-                'actual_spread': game['result'],
-                'spread_error': spread_error,
-                'predicted_total': pred['predicted_total'],
-                'actual_total': game['home_score'] + game['away_score'],
-                'total_error': total_error,
-                'predicted_home_score': pred['predicted_home_score'],
-                'actual_home_score': game['home_score'],
-                'home_score_error': home_score_error,
-                'predicted_away_score': pred['predicted_away_score'],
-                'actual_away_score': game['away_score'],
-                'away_score_error': away_score_error,
-                'vegas_spread': game.get('spread_line'),
-                'spread_agreement': abs(pred['predicted_spread'] - game.get('spread_line', 0)),
-                'bet_won': bet_won
-            })
+        # Header
+        print(f"\n{'#':<4} {'Matchup':<25} {'Score P/A':<15} {'Spread P/A':<15} {'Total P/A':<15} {'WinP':<12} {'Tiered':<10}")
+        print("─"*130)
         
-        if len(results) == 0:
-            print("⚠️  No Ultra Conservative bets found")
-            return None
-        
-        results_df = pd.DataFrame(results)
-        
-        # Summary stats
-        total_bets = len(results_df)
-        wins = results_df['bet_won'].sum()
-        losses = total_bets - wins
-        win_rate = wins / total_bets
-        
-        # ROI calculation (assuming -150 favorite odds)
-        profit = (wins * 0.6667) - losses
-        roi = (profit / total_bets) * 100
-        
-        # Accuracy metrics
-        avg_spread_error = results_df['spread_error'].mean()
-        avg_total_error = results_df['total_error'].mean()
-        avg_home_score_error = results_df['home_score_error'].mean()
-        avg_away_score_error = results_df['away_score_error'].mean()
-        
-        print(f"{'='*70}")
-        print(f"🎯 ULTRA CONSERVATIVE BETS")
-        print(f"{'='*70}")
-        print(f"Total Bets: {total_bets}")
-        print(f"Wins: {wins}")
-        print(f"Losses: {losses}")
-        print(f"Win Rate: {win_rate:.1%}")
-        print(f"ROI: {roi:+.1f}%")
-        
-        print(f"\n{'='*70}")
-        print(f"📊 PREDICTION ACCURACY")
-        print(f"{'='*70}")
-        print(f"Spread MAE: {avg_spread_error:.2f} points")
-        print(f"Total MAE: {avg_total_error:.2f} points")
-        print(f"Home Score MAE: {avg_home_score_error:.2f} points")
-        print(f"Away Score MAE: {avg_away_score_error:.2f} points")
-        
-        # Weekly breakdown
-        print(f"\n{'='*70}")
-        print(f"📅 WEEKLY BREAKDOWN")
-        print(f"{'='*70}")
-        
-        weekly = results_df.groupby('week').agg({
-            'bet_won': ['count', 'sum', 'mean']
-        }).round(3)
-        
-        for week in sorted(results_df['week'].unique()):
-            week_data = results_df[results_df['week'] == week]
-            week_bets = len(week_data)
-            week_wins = week_data['bet_won'].sum()
-            week_wr = week_wins / week_bets
-            
-            print(f"Week {week:2d}: {week_bets} bets, {week_wins} wins ({week_wr:.0%})")
-        
-        # Show losses
-        if losses > 0:
-            print(f"\n{'='*70}")
-            print(f"❌ LOSSES ANALYSIS")
-            print(f"{'='*70}")
-            
-            losses_df = results_df[~results_df['bet_won']]
-            
-            for _, loss in losses_df.iterrows():
-                print(f"\nWeek {loss['week']}: {loss['away_team']} @ {loss['home_team']}")
-                print(f"   Bet: {loss['bet_team']} ({loss['win_prob']:.0%} confidence)")
-                print(f"   Spread Agreement: {loss['spread_agreement']:.1f} pts")
-                print(f"   Actual Score: {loss['actual_away_score']:.0f}-{loss['actual_home_score']:.0f}")
-        
-        return {
-            'season': season,
-            'total_bets': total_bets,
-            'wins': wins,
-            'losses': losses,
-            'win_rate': win_rate,
-            'roi': roi,
-            'spread_mae': avg_spread_error,
-            'total_mae': avg_total_error,
-            'home_score_mae': avg_home_score_error,
-            'away_score_mae': avg_away_score_error,
-            'results': results_df
-        }
-    
-    def save_results(self, season_results):
-        """Save results to CSV"""
-        if season_results is None:
-            return
-        
-        # Save detailed results
-        results_df = season_results['results']
-        
-        if os.path.exists(self.results_file):
-            existing = pd.read_csv(self.results_file)
-            # Remove old results for this season
-            existing = existing[existing['season'] != season_results['season']]
-            results_df = pd.concat([existing, results_df], ignore_index=True)
-        
-        results_df.to_csv(self.results_file, index=False)
-        print(f"\n💾 Saved: {self.results_file}")
-        
-        # Save summary
-        summary = {
-            'season': season_results['season'],
-            'total_bets': season_results['total_bets'],
-            'wins': season_results['wins'],
-            'losses': season_results['losses'],
-            'win_rate': season_results['win_rate'],
-            'roi': season_results['roi'],
-            'spread_mae': season_results['spread_mae'],
-            'total_mae': season_results['total_mae'],
-            'home_score_mae': season_results['home_score_mae'],
-            'away_score_mae': season_results['away_score_mae'],
-            'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        week_stats = {
+            'total': 0,
+            'correct': 0,
+            'tiered_bets': 0,
+            'tiered_correct': 0,
+            'tiered_profit': 0,
+            'spread_errors': [],
+            'total_errors': [],
+            'home_score_errors': [],
+            'away_score_errors': []
         }
         
-        summary_df = pd.DataFrame([summary])
+        for i, (idx, game) in enumerate(week_games.iterrows(), 1):
+            pred = self.make_predictions(game)
+            
+            matchup = f"{game['away_team']} @ {game['home_team']}"
+            
+            # Scores
+            pred_home = pred['predicted_home_score']
+            pred_away = pred['predicted_away_score']
+            actual_home = game['home_score']
+            actual_away = game['away_score']
+            
+            score_str = f"~{pred_away:.0f}-{pred_home:.0f}/{actual_away:.0f}-{actual_home:.0f}"
+            
+            # Spread
+            actual_spread = actual_home - actual_away
+            spread_pred_str = f"{pred['predicted_spread']:+.1f}/{actual_spread:+.1f}"
+            
+            # Total
+            actual_total = actual_home + actual_away
+            total_str = f"{pred['predicted_total']:.1f}/{actual_total:.1f}"
+            
+            # Track errors
+            week_stats['spread_errors'].append(abs(pred['predicted_spread'] - actual_spread))
+            week_stats['total_errors'].append(abs(pred['predicted_total'] - actual_total))
+            week_stats['home_score_errors'].append(abs(pred_home - actual_home))
+            week_stats['away_score_errors'].append(abs(pred_away - actual_away))
+            
+            # Win prob
+            prob = f"{pred['away_prob']:.0%}-{pred['home_prob']:.0%}"
+            
+            # Prediction correct?
+            pred_winner = game['home_team'] if pred['home_prob'] > 0.5 else game['away_team']
+            actual_winner = game['home_team'] if actual_home > actual_away else game['away_team']
+            
+            week_stats['total'] += 1
+            if pred_winner == actual_winner:
+                week_stats['correct'] += 1
+            
+            # Tiered Confidence
+            is_tiered, tiered_team, confidence, bet_size, tier = self.check_tiered_confidence(pred, game)
+            tiered_str = "⏸️"
+            if is_tiered:
+                tiered_correct = self.check_result(game, tiered_team)
+                tiered_str = f"✅{tier}" if tiered_correct else f"❌{tier}"
+                week_stats['tiered_bets'] += 1
+                
+                # Calculate profit with realistic odds
+                profit = self.calculate_realistic_profit(confidence, bet_size, tiered_correct)
+                week_stats['tiered_profit'] += profit
+                
+                if tiered_correct:
+                    week_stats['tiered_correct'] += 1
+            
+            print(f"{i:<4} {matchup:<25} {score_str:<15} {spread_pred_str:<15} {total_str:<15} {prob:<12} {tiered_str:<10}")
         
-        if os.path.exists(self.summary_file):
-            existing = pd.read_csv(self.summary_file)
-            existing = existing[existing['season'] != season_results['season']]
-            summary_df = pd.concat([existing, summary_df], ignore_index=True)
+        print("─"*130)
         
-        summary_df = summary_df.sort_values('season')
-        summary_df.to_csv(self.summary_file, index=False)
-        print(f"💾 Saved: {self.summary_file}")
+        # MAEs
+        spread_mae = np.mean(week_stats['spread_errors'])
+        total_mae = np.mean(week_stats['total_errors'])
+        home_mae = np.mean(week_stats['home_score_errors'])
+        away_mae = np.mean(week_stats['away_score_errors'])
+        
+        # Summary
+        acc = week_stats['correct'] / week_stats['total'] * 100
+        print(f"\n📈 OVERALL: {week_stats['correct']}/{week_stats['total']} ({acc:.1f}%)")
+        print(f"📏 MAE: Spread {spread_mae:.2f}pts | Total {total_mae:.2f}pts | Home {home_mae:.2f}pts | Away {away_mae:.2f}pts")
+        
+        if week_stats['tiered_bets'] > 0:
+            tiered_wr = week_stats['tiered_correct'] / week_stats['tiered_bets'] * 100
+            print(f"💰 TIERED CONFIDENCE (≥70%): {week_stats['tiered_correct']}/{week_stats['tiered_bets']} ({tiered_wr:.1f}%)")
+            print(f"   Profit: CHF {week_stats['tiered_profit']:.2f}")
+        else:
+            print(f"💰 TIERED CONFIDENCE: No bets")
+        
+        return week_stats
     
     def run(self):
         """Main function"""
         
-        print("\n" + "="*70)
-        print("📊 PERFORMANCE TRACKER")
-        print("="*70)
+        print("\n" + "="*130)
+        print("🏈 2025 NFL SEASON PERFORMANCE TRACKER - FIXED VERSION")
+        print("="*130)
         
-        # Load
-        if not self.load_data():
-            return
+        weeks = sorted(self.completed['week'].unique())
         
-        if not self.load_models('betting'):
-            return
+        season_totals = {
+            'total': 0,
+            'correct': 0,
+            'tiered_bets': 0,
+            'tiered_correct': 0,
+            'tiered_profit': 0,
+            'spread_errors': [],
+            'total_errors': [],
+            'home_score_errors': [],
+            'away_score_errors': []
+        }
         
-        # Get available seasons
-        seasons = sorted(self.df['season'].unique())
-        current_season = seasons[-1]
-        
-        print(f"\n📅 Available seasons: {seasons[0]}-{current_season}")
-        
-        # Menu
-        print("\n1️⃣  Analyze current season ({})".format(current_season))
-        print("2️⃣  Analyze specific season")
-        print("3️⃣  Analyze all seasons")
-        
-        choice = input("\n👉 Choice (1-3): ").strip()
-        
-        if choice == '1':
-            results = self.analyze_season(current_season)
-            if results:
-                self.save_results(results)
-        
-        elif choice == '2':
-            season = int(input("Season: "))
-            results = self.analyze_season(season)
-            if results:
-                self.save_results(results)
-        
-        elif choice == '3':
-            # Analyze last 5 seasons
-            for season in seasons[-5:]:
-                results = self.analyze_season(season)
-                if results:
-                    self.save_results(results)
-                print()
+        # Print weeks
+        for week in weeks:
+            week_stats = self.print_week(week)
             
-            # Overall summary
-            if os.path.exists(self.summary_file):
-                print("\n" + "="*70)
-                print("🏆 OVERALL PERFORMANCE")
-                print("="*70 + "\n")
-                
-                summary = pd.read_csv(self.summary_file)
-                
-                for _, row in summary.iterrows():
-                    print(f"{row['season']}: {row['wins']}-{row['losses']} ({row['win_rate']:.1%}), ROI: {row['roi']:+.1f}%")
-                
-                # Totals
-                total_bets = summary['total_bets'].sum()
-                total_wins = summary['wins'].sum()
-                overall_wr = total_wins / total_bets
-                total_profit = (total_wins * 0.6667) - (total_bets - total_wins)
-                overall_roi = (total_profit / total_bets) * 100
-                
-                print(f"\n{'='*70}")
-                print(f"TOTAL: {total_wins}-{total_bets - total_wins} ({overall_wr:.1%}), ROI: {overall_roi:+.1f}%")
-                print(f"{'='*70}")
+            if week_stats:
+                season_totals['total'] += week_stats['total']
+                season_totals['correct'] += week_stats['correct']
+                season_totals['tiered_bets'] += week_stats['tiered_bets']
+                season_totals['tiered_correct'] += week_stats['tiered_correct']
+                season_totals['tiered_profit'] += week_stats['tiered_profit']
+                season_totals['spread_errors'].extend(week_stats['spread_errors'])
+                season_totals['total_errors'].extend(week_stats['total_errors'])
+                season_totals['home_score_errors'].extend(week_stats['home_score_errors'])
+                season_totals['away_score_errors'].extend(week_stats['away_score_errors'])
         
-        print("\n✅ Done!\n")
+        # Season Summary
+        print("\n" + "="*130)
+        print("🏆 2025 SEASON SUMMARY")
+        print("="*130)
+        
+        print(f"\n📊 GAMES: {season_totals['total']} ({len(weeks)} weeks)")
+        
+        # Overall
+        if season_totals['total'] > 0:
+            acc = season_totals['correct'] / season_totals['total'] * 100
+            print(f"\n📈 OVERALL PREDICTIONS:")
+            print(f"   Accuracy: {season_totals['correct']}/{season_totals['total']} ({acc:.1f}%)")
+            print(f"   Expected: 67.92% (from test set 2024-2025)")
+            print(f"   {'✅ ON TARGET' if acc >= 65 else '⚠️ BELOW' if acc >= 60 else '❌ POOR'}")
+        
+        # MAE Summary
+        spread_mae = np.mean(season_totals['spread_errors'])
+        total_mae = np.mean(season_totals['total_errors'])
+        home_mae = np.mean(season_totals['home_score_errors'])
+        away_mae = np.mean(season_totals['away_score_errors'])
+        
+        print(f"\n📏 MEAN ABSOLUTE ERROR (MAE):")
+        print(f"   Spread: {spread_mae:.2f} pts (Expected: 10.21)")
+        print(f"   Total: {total_mae:.2f} pts (Expected: 10.10)")
+        print(f"   Home Score: {home_mae:.2f} pts (Expected: 7.35)")
+        print(f"   Away Score: {away_mae:.2f} pts (Expected: 7.39)")
+        
+        # Tiered Confidence
+        if season_totals['tiered_bets'] > 0:
+            tiered_wr = season_totals['tiered_correct'] / season_totals['tiered_bets'] * 100
+            print(f"\n💰 TIERED CONFIDENCE STRATEGY (Base ≥70%):")
+            print(f"   Win Rate: {season_totals['tiered_correct']}/{season_totals['tiered_bets']} ({tiered_wr:.1f}%)")
+            print(f"   Expected: 74.7% WR, -295 avg odds (from realistic backtest)")
+            print(f"   Profit: CHF {season_totals['tiered_profit']:.2f} (variable bet sizing CHF 10-30)")
+            print(f"   ROI: {(season_totals['tiered_profit'] / (season_totals['tiered_bets'] * 11) * 100):.1f}% (avg bet ~CHF 11)")
+            print(f"   {'✅ ON TARGET' if tiered_wr >= 72 else '⚠️ BELOW' if tiered_wr >= 67 else '❌ POOR'}")
+        else:
+            print(f"\n💰 TIERED CONFIDENCE: No bets yet")
+        
+        print("\n")
 
 
 def main():
-    tracker = PerformanceTracker()
+    tracker = Season2025Tracker()
     tracker.run()
 
 

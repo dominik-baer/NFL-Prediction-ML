@@ -126,17 +126,17 @@ class NFLDataCollector:
         for window in windows:
             # Points Scored
             self.team_stats[f'points_scored_L{window}'] = self.team_stats.groupby('team')['points_scored'].transform(
-                lambda x: x.rolling(window=window, min_periods=1).mean().shift(1)
+                lambda x: x.rolling(window=window, min_periods=window).mean().shift(1)
             )
             
             # Points Allowed
             self.team_stats[f'points_allowed_L{window}'] = self.team_stats.groupby('team')['points_allowed'].transform(
-                lambda x: x.rolling(window=window, min_periods=1).mean().shift(1)
+                lambda x: x.rolling(window=window, min_periods=window).mean().shift(1)
             )
             
             # Win Rate
             self.team_stats[f'win_rate_L{window}'] = self.team_stats.groupby('team')['won'].transform(
-                lambda x: x.rolling(window=window, min_periods=1).mean().shift(1)
+                lambda x: x.rolling(window=window, min_periods=window).mean().shift(1)
             )
             
             # Point Differential
