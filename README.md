@@ -481,14 +481,14 @@ Output: `nfl_training_data_MEGA.csv`
 
 **2. Feature Engineering**
 ```bash
-python 02_feature_engineering_IMPROVED.py
+python 02_feature_engineering.py
 ```
 Generiert 149 Features inkl. Elo-Ratings, Rolling Stats und Interaktionen.
 Output: Enriched CSV mit allen Features
 
 **3. Modell-Training**
 ```bash
-python 03_model_training_IMPROVED.py
+python 03_model_training.py
 ```
 - K-Best Feature Selection
 - Trainiert 5 Random Forest Modelle
@@ -497,7 +497,7 @@ python 03_model_training_IMPROVED.py
 
 **4. Strategy Backtesting**
 ```bash
-python 05_strategy_backtest.py
+python betting_strategy.py
 ```
 - Testet 58 verschiedene Strategien
 - Berechnet realistic Odds
@@ -506,13 +506,13 @@ python 05_strategy_backtest.py
 
 **5. Wöchentliche Vorhersagen**
 ```bash
-python 04_prediction_FIXED.py
+python 04_prediction.py
 ```
 Interaktives Tool mit Tiered Confidence Vorhersagen für kommende Woche.
 
 **6. Season Performance Tracker**
 ```bash
-python season_2025_tracker_FIXED.py
+python 05_track_performance.py
 ```
 Tracked Performance über 2025 Season mit MAE und Profit Tracking.
 
@@ -555,11 +555,11 @@ Tracked Performance über 2025 Season mit MAE und Profit Tracking.
 ```
 NFL-Prediction-ML/
 ├── 01_data_collection.py              # nflverse Daten abrufen
-├── 02_feature_engineering_IMPROVED.py # 149 Features generieren
-├── 03_model_training_IMPROVED.py      # K-Best Selection + RF Training
-├── 04_prediction_FIXED.py             # Tiered Confidence Vorhersagen
-├── 05_strategy_backtest.py            # Realistic Odds Backtest
-├── season_2025_tracker_FIXED.py       # Season Performance Tracker
+├── 02_feature_engineering.py          # 149 Features generieren
+├── 03_model_training.py               # K-Best Selection + RF Training
+├── 04_prediction.py                   # Tiered Confidence Vorhersagen
+├── 05_track_performance.py            # Season Performance Tracker
+├── betting_strategy.py                # Realistic Odds Backtest 
 ├── models/
 │   ├── win_loss_model.pkl             # Win/Loss Model (K=40)
 │   ├── spread_model.pkl               # Spread Model (K=65)
@@ -645,7 +645,7 @@ MIT Lizenz - siehe LICENSE Datei für Details
 **Dominik Baer**
 - GitHub: [@dominik-baer](https://github.com/dominik-baer)
 - Projekt: Machine Learning Kurs (HS25)
-- Hochschule: [Deine Hochschule]
+- Hochschule: FHNW
 
 ---
 
